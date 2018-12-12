@@ -94,8 +94,6 @@ df_hist <- df_hist %>% group_by(user_id, order_id.x) %>%
 df_hist <- replace(df_hist, is.na(df_hist), 0)
 df_fin <-  df_clean %>% left_join(df_hist)
 
-# Maybe we should consider combining all skill ids in one variable and skill names in another
-
 #convert to factors
 df_fin <- df_fin %>%
   mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
@@ -167,6 +165,7 @@ reg_fa_summary
 
 ```{r}
 # plots to examine RSS, R2, Cp and BIC 
+par(mfrow=c(2,2))
 {plot(reg_fa_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
 plot(reg_fa_summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
 
@@ -343,6 +342,7 @@ reg_bh_summary
 # which.min(val.errors)
 
 # plots to examine RSS, R2, Cp and BIC 
+par(mfrow=c(2,2))
 {plot(reg_bh_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
 plot(reg_bh_summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
 
@@ -474,6 +474,7 @@ reg_c_summary
 ```
 
 ```{r}
+par(mfrow=c(2,2))
 {plot(reg_c_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
 plot(reg_c_summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
 
