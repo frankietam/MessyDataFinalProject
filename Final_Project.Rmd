@@ -55,15 +55,20 @@ df_raw <- read.csv("skill_builder_data.csv")
 ##("first_action") empty values; student clicked on the problem but did nothing else
 ##("first_action") scaffolding values; scaffolding opportunities varied across problem sets
 ##("answer_type") open_response; this type of answers always marked correct
+##("tutor_mode") Tutor or test mode; students did not take any hints on test mode
 ##("ms_first_response") negative values and zero
 ##("overlap_time") negative values and zero
 df_clean <- df_raw %>% 
   filter(original==1, first_action!=2, !is.na(first_action), 
-         answer_type!="open_response", ms_first_response > 0, overlap_time > 0) %>%
+         answer_type!="open_response", tutor_mode=="tutor", ms_first_response > 0, overlap_time > 0) %>%
   rename(problem_type = type)
 #revalue the following columns:
 ##("bottom_hint") replace empty values into 0; it means the student did not ask for a hint
 df_clean$bottom_hint[is.na(df_clean$bottom_hint)] <- 0
+
+##Removing the skill_id and skill_name columns and merging identical rows
+df_clean <- df_clean %>% select(-skill_id, -skill_name)
+df_clean <- subset(df_clean,!duplicated(df_clean$order_id))
 ```
 
 #Part B: Hint-Taking Prediction
@@ -110,7 +115,7 @@ test <- df_fin %>% slice(splitsize+1:n())
 ##Fit a logistic model on train and compute AUC on test set
 ```{r}
 #fit a random forest model on train
-lg_hint <- glm(first_action ~ tutor_mode + answer_type + prev_total_correct + 
+lg_hint <- glm(first_action ~  answer_type + prev_total_correct + 
                  prev_percent_correct + prev_problem_requested_hint + 
                  prev_percent_problem_requested_hint + prev_avg_response_time + 
                  prev_total_bottom_hint + prev_percent_bottom_hint + prev_avg_attempt_count, 
@@ -131,7 +136,7 @@ Before fitting a model, we dropped some features (which we hoped to embed in the
   problem_id = more than 53 factors
   teacher_id = more than 53 factors
   
-The AUC of the logistic model predicting hint-taking on the test dataset is 84.2032
+The AUC of the logistic model predicting hint-taking on the test dataset is 85.17075
 
 The five smallest and five largest coefficients in this model
   Smallest: answer_typechoose_1 < answer_typechoose_n < prev_percent_correct <
@@ -150,7 +155,7 @@ The features we decided to drop:
 ```{r}
 # forward stepwise selection
 # error if includes anwser_type
-regfit.fa.fwd = regsubsets(first_action ~ tutor_mode + prev_total_correct +
+regfit.fa.fwd = regsubsets(first_action ~  prev_total_correct +
                           prev_percent_correct + prev_problem_requested_hint + 
                           prev_percent_problem_requested_hint + prev_avg_response_time + 
                           prev_total_bottom_hint + prev_percent_bottom_hint +
@@ -210,7 +215,7 @@ re_lg_hint_coef <- summary(re_lg_hint)[["coefficients"]]
 re_lg_hint_coef[order(re_lg_hint_coef[ , 1]), ]   
 ```
 
-The AUC of the logistic model predicting hint-taking on the test dataset is 82.84269 (*decreased from 84.2)
+The AUC of the logistic model predicting hint-taking on the test dataset is 84.97453 (*decreased from 85.2)
 
 The smallest and five largest coefficients in this model
   Smallest: answer_typechoose_1 < answer_typechoose_n < prev_percent_problem_requested_hint < 
