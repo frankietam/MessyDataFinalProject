@@ -71,7 +71,6 @@ df_clean <- df_clean %>% select(-skill_id, -skill_name)
 df_clean <- subset(df_clean,!duplicated(df_clean$order_id))
 ```
 
-#Part B: Hint-Taking Prediction
 ##Feature engineering; make historical features
 ```{r}
 #use the latest order id as reference
@@ -98,6 +97,7 @@ df_fin <-  df_clean %>% left_join(df_hist)
 df_fin <- df_fin %>%
   mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
 ```
+#Part B: Hint-Taking Prediction Model
 
 ##Create a training Set / test Set
 ```{r}
@@ -109,6 +109,119 @@ splitsize = floor(nrow(df_fin)/2)
 train <- df_fin %>% slice(1:splitsize)
 test <- df_fin %>% slice(splitsize+1:n())
 ```
+
+## Forward stepwise regression
+```{r}
+# forward stepwise selection
+regfit.fa.fwd = regsubsets(first_action ~  prev_total_correct +
+                          prev_percent_correct + prev_problem_requested_hint + 
+                          prev_percent_problem_requested_hint + prev_avg_response_time + 
+                          prev_total_bottom_hint + prev_percent_bottom_hint +
+                          prev_avg_attempt_count, data=train, method="forward")
+
+reg_fa_summary = summary(regfit.fa.fwd)
+reg_fa_summary
+```
+
+## Plotting the results
+```{r}
+# plots to examine RSS, R2, Cp and BIC 
+par(mfrow=c(2,2))
+{plot(reg_fa_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
+plot(reg_fa_summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
+
+adj_r2_max = which.max(reg_fa_summary$adjr2)
+
+points(adj_r2_max, reg_fa_summary$adjr2[adj_r2_max], col ="red", cex = 2, pch = 20)
+
+plot(reg_fa_summary$cp, xlab = "Number of Variables", ylab = "Cp", type = "l")
+cp_min = which.min(reg_fa_summary$cp) # 10
+points(cp_min, reg_fa_summary$cp[cp_min], col = "red", cex = 2, pch = 20)
+
+plot(reg_fa_summary$bic, xlab = "Number of Variables", ylab = "BIC", type = "l")
+bic_min = which.min(reg_fa_summary$bic) # 6
+points(bic_min, reg_fa_summary$bic[bic_min], col = "red", cex = 2, pch = 20)}
+```
+
+##Drop the lowest performing predictors and fit the logistic model according to result
+```{r}
+#refit a logistic regression model on train using 4 features based on forward stepwise selection
+
+# prev_problem_requested_hint 
+# prev_percent_problem_requested_hint
+# prev_total_bottom_hint 
+# prev_percent_bottom_hint
+
+# re_lg_hint <- glm(first_action ~ tutor_mode + answer_type + prev_total_correct + 
+#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
+#                  prev_percent_bottom_hint + prev_avg_attempt_count, 
+#                data=train, family="binomial")
+
+re_lg_hint <- glm(first_action ~ prev_problem_requested_hint +
+                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
+                 prev_percent_bottom_hint,
+                  data=train, family="binomial")
+
+#compute AUC of this model on the test dataset  
+test$re.lg.hint.pred.prob <- predict(re_lg_hint,newdata=test,type='response')
+test.re.lg.hint.pred <- prediction(test$re.lg.hint.pred.prob, test$first_action)
+test.re.lg.hint.perf <- performance(test.re.lg.hint.pred, "auc")
+cat('the auc score is ', 100*test.re.lg.hint.perf@y.values[[1]], "\n")  
+
+#calculate the five smallest and five largest coefficients 
+re_lg_hint_coef <- summary(re_lg_hint)[["coefficients"]]
+re_lg_hint_coef[order(re_lg_hint_coef[ , 1]), ]   
+```
+
+## Fitting a random forest model based on the results of the forward stepwise regression
+
+```{r}
+#fit a random forest model on train
+
+# rf_hint <- randomForest(first_action ~ tutor_mode + answer_type + prev_total_correct + 
+#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
+#                  prev_percent_bottom_hint + prev_avg_attempt_count, data=train, ntree=200, 
+#                  na.action=na.omit)
+
+rf_hint <- randomForest(first_action ~ prev_problem_requested_hint +
+                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
+                 prev_percent_bottom_hint,
+               data=train, ntree = 200, na.action=na.omit)
+
+#compute AUC of this model on the test dataset  
+test$rf.hint.pred.prob <- predict(rf_hint,newdata=test,type='prob')[,2]
+test.rf.hint.pred <- prediction(test$rf.hint.pred.prob, test$first_action)
+test.rf.hint.perf <- performance(test.rf.hint.pred, "auc")
+cat('the auc score is ', 100*test.rf.hint.perf@y.values[[1]], "\n") 
+```
+
+##comparing the performance of two models using performance plots
+
+```{r}
+##create a performance plot
+test.1 <- test %>% mutate(first_action = as.integer(first_action)-1)
+plot.data.rf <- test.1 %>% arrange(desc(rf.hint.pred.prob)) %>% 
+  mutate(numrank = row_number(), percent.first.action = cumsum(first_action)/numrank,
+         method = rep("Random Forest",n())) %>% 
+  select(numrank, percent.first.action, method)
+
+plot.data.lm <- test.1 %>% arrange(desc(re.lg.hint.pred.prob)) %>% 
+  mutate(numrank = row_number(), percent.first.action = cumsum(first_action)/numrank,
+         method = rep("Logistic Regression",n())) %>% 
+  select(numrank, percent.first.action,method)
+
+plot.data <- bind_rows(plot.data.rf,plot.data.lm)
+
+##create plot
+theme_set(theme_bw())
+p <- ggplot(data=plot.data, aes(x=numrank, y=percent.first.action, col = method)) 
+p <- p + geom_line()
+p <- p + xlab('Number of Attempts') + xlim(1,1000)
+p <- p + scale_y_continuous("Percent of Attempts with Hint", limits=c(0.5,1), labels=scales::percent)
+p
+```
+
+#Should Be removed************************
 
 ##Fit a logistic model on train and compute AUC on test set
 ```{r}
@@ -150,69 +263,11 @@ The features we decided to drop:
   and each had relatively low coefficient than its compared feature. 
   
   
-```{r}
-# forward stepwise selection
-# error if includes anwser_type
-regfit.fa.fwd = regsubsets(first_action ~  prev_total_correct +
-                          prev_percent_correct + prev_problem_requested_hint + 
-                          prev_percent_problem_requested_hint + prev_avg_response_time + 
-                          prev_total_bottom_hint + prev_percent_bottom_hint +
-                          prev_avg_attempt_count, data=train, method="forward")
-
-reg_fa_summary = summary(regfit.fa.fwd)
-reg_fa_summary
-```
-
-```{r}
-# plots to examine RSS, R2, Cp and BIC 
-par(mfrow=c(2,2))
-{plot(reg_fa_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
-plot(reg_fa_summary$adjr2, xlab = "Number of Variables", ylab = "Adjusted RSq", type = "l")
-
-adj_r2_max = which.max(reg_fa_summary$adjr2)
-
-points(adj_r2_max, reg_fa_summary$adjr2[adj_r2_max], col ="red", cex = 2, pch = 20)
-
-plot(reg_fa_summary$cp, xlab = "Number of Variables", ylab = "Cp", type = "l")
-cp_min = which.min(reg_fa_summary$cp) # 10
-points(cp_min, reg_fa_summary$cp[cp_min], col = "red", cex = 2, pch = 20)
-
-plot(reg_fa_summary$bic, xlab = "Number of Variables", ylab = "BIC", type = "l")
-bic_min = which.min(reg_fa_summary$bic) # 6
-points(bic_min, reg_fa_summary$bic[bic_min], col = "red", cex = 2, pch = 20)}
 
 
-```
+
   
-##Drop the predictors and refit the logistic model 
-```{r}
-#refit a logistic regression model on train using 4 features based on forward stepwise selection
 
-# prev_problem_requested_hint 
-# prev_percent_problem_requested_hint
-# prev_total_bottom_hint 
-# prev_percent_bottom_hint
-
-# re_lg_hint <- glm(first_action ~ tutor_mode + answer_type + prev_total_correct + 
-#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
-#                  prev_percent_bottom_hint + prev_avg_attempt_count, 
-#                data=train, family="binomial")
-
-re_lg_hint <- glm(first_action ~ prev_problem_requested_hint +
-                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
-                 prev_percent_bottom_hint,
-                  data=train, family="binomial")
-
-#compute AUC of this model on the test dataset  
-test$re.lg.hint.pred.prob <- predict(re_lg_hint,newdata=test,type='response')
-test.re.lg.hint.pred <- prediction(test$re.lg.hint.pred.prob, test$first_action)
-test.re.lg.hint.perf <- performance(test.re.lg.hint.pred, "auc")
-cat('the auc score is ', 100*test.re.lg.hint.perf@y.values[[1]], "\n")  
-
-#calculate the five smallest and five largest coefficients 
-re_lg_hint_coef <- summary(re_lg_hint)[["coefficients"]]
-re_lg_hint_coef[order(re_lg_hint_coef[ , 1]), ]   
-```
 
 The AUC of the logistic model predicting hint-taking on the test dataset is 84.97453 (*decreased from 85.2)
 
@@ -224,52 +279,11 @@ The smallest and five largest coefficients in this model
             
 ### Maybe add some explanation as to why we decided to stay without the 3 variables dropped if the AUC score is lower? maybe for easier interpretability?
             
-```{r}
-#fit a random forest model on train
 
-# rf_hint <- randomForest(first_action ~ tutor_mode + answer_type + prev_total_correct + 
-#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
-#                  prev_percent_bottom_hint + prev_avg_attempt_count, data=train, ntree=200, 
-#                  na.action=na.omit)
-
-rf_hint <- randomForest(first_action ~ prev_problem_requested_hint +
-                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
-                 prev_percent_bottom_hint,
-               data=train, ntree = 200, na.action=na.omit)
-
-#compute AUC of this model on the test dataset  
-test$rf.hint.pred.prob <- predict(rf_hint,newdata=test,type='prob')[,2]
-test.rf.hint.pred <- prediction(test$rf.hint.pred.prob, test$first_action)
-test.rf.hint.perf <- performance(test.rf.hint.pred, "auc")
-cat('the auc score is ', 100*test.rf.hint.perf@y.values[[1]], "\n") 
-```
 
 The computed auc score is 70.20511. *How does the AUC of the random forest compare with the AUC of the logistic regression model?
 
-```{r}
-#compares the performance of two models using the plots
-##create a performance plot
-test.1 <- test %>% mutate(first_action = as.integer(first_action)-1)
-plot.data.rf <- test.1 %>% arrange(desc(rf.hint.pred.prob)) %>% 
-  mutate(numrank = row_number(), percent.first.action = cumsum(first_action)/numrank,
-         method = rep("Random Forest",n())) %>% 
-  select(numrank, percent.first.action, method)
 
-plot.data.lm <- test.1 %>% arrange(desc(re.lg.hint.pred.prob)) %>% 
-  mutate(numrank = row_number(), percent.first.action = cumsum(first_action)/numrank,
-         method = rep("Logistic Regression",n())) %>% 
-  select(numrank, percent.first.action,method)
-
-plot.data <- bind_rows(plot.data.rf,plot.data.lm)
-
-##create plot
-theme_set(theme_bw())
-p <- ggplot(data=plot.data, aes(x=numrank, y=percent.first.action, col = method)) 
-p <- p + geom_line()
-p <- p + xlab('Number of Attempts') + xlim(1,1000)
-p <- p + scale_y_continuous("Percent of Attempts with Hint", limits=c(0.5,1), labels=scales::percent)
-p
-```
 Overall, logistic regression shows a better performance than that of the random forest model.
 # Part C: Bottom-out-Hint-Taking Prediction
 ```{r}
