@@ -267,7 +267,7 @@ p <- p + scale_y_continuous("Percent of Attempts with Hint", limits=c(0.5,1), la
 p
 ```
 Overall, logistic regression shows a better performance than that of the random forest model.
-# Part C: Bottom-up-Hint-Taking Prediction
+# Part C: Bottom-out-Hint-Taking Prediction
 ```{r}
 #fit a logistic regression model on train
 lg_bottom_hint <- glm(bottom_hint ~ tutor_mode + answer_type + prev_total_correct + 
@@ -393,6 +393,7 @@ Largest:
 4. prev_percent_problem_requested_hint
 5. prev_avg_attempt_count 
 
+# Part D: Hint-Taking Prediction
 ```{r}
 #fit a random forest model on train
 rf_bottom_hint <- randomForest(bottom_hint ~ tutor_mode + answer_type + 
