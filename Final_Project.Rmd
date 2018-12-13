@@ -79,30 +79,32 @@ orders_a <- df_clean[,c(1,3)]
 orders_b <- df_clean[,c(1,3)]
 names(orders_a) <- c("order_id.x", "user_id")
 names(orders_b) <- c("order_id.y", "user_id")
-Orders <- left_join(orders_a,orders_b, by = "user_id") %>% filter(order_id.y < order_id.x)
+orders <- left_join(orders_a,orders_b, by = "user_id") %>% filter(order_id.y < order_id.x)
 
-df_m <- df_clean[c('user_id', 'order_id', 'problem_id', 'correct', 'hint_count', 'hint_total', 'bottom_hint', 'ms_first_response', 'attempt_count')]
-df_hist <- merge(df_m, df_m, by = 'user_id', all.x = TRUE, allow.cartesian=TRUE)
-df_hist <- df_hist %>% filter(order_id.y < order_id.x)
-df_hist <- df_hist %>% group_by(order_id.x) %>% 
-  summarise(prev_total_correct = sum(correct.y),
-            prev_num_problem = length(unique(problem_id.y)),
+df_col <- df_clean[c('user_id', 'order_id', 'problem_id', 'correct', 'hint_count', 'hint_total', 'bottom_hint', 'ms_first_response', 'attempt_count')]
+
+df_join <- left_join(Orders, df_m, by=c("user_id", "order_id.y" = "order_id"))
+
+df_hist <- df_join %>% group_by(order_id.x) %>% 
+  summarise(prev_total_correct = sum(correct),
+            prev_num_problem = length(unique(problem_id)),
             prev_percent_correct=prev_total_correct/prev_num_problem,
-            prev_questions_with_hints = sum(hint_total.y>0),
-            prev_total_hints = sum(hint_total.y),
+            prev_questions_with_hints = sum(hint_total>0),
+            prev_total_hints = sum(hint_total),
             prev_avg_hints_per_problem = prev_total_hints/prev_questions_with_hints,
-            prev_problem_requested_hint = sum(hint_count.y>0),
+            prev_problem_requested_hint = sum(hint_count>0),
             prev_percent_problem_requested_hint = prev_problem_requested_hint/prev_num_problem,
-            prev_avg_response_time = mean(ms_first_response.y),
-            prev_total_bottom_hint = sum(bottom_hint.y == 1),
+            prev_avg_response_time = mean(ms_first_response),
+            prev_total_bottom_hint = sum(bottom_hint == 1),
             prev_percent_bottom_hint = prev_total_bottom_hint/prev_questions_with_hints,
-            prev_avg_attempt_count = mean(attempt_count.y)) 
+            prev_avg_attempt_count = mean(attempt_count)) 
+
 df_hist <- replace(df_hist, is.na(df_hist), 0)
-#df_fin <-  df_clean %>% left_join(df_hist, by = order_id)
+df_fin <-  left_join(df_hist, df_clean, by = c("order_id.x" = "order_id")) 
+## we only keep the attemps by students who previously attempted; we hope to draw implications from historical features' coefficients on further hint-taking behaviors
 
 #convert to factors
-#df_fin <- df_fin %>%
- # mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
+df_fin <- df_fin %>% mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
 ```
 #Part B: Hint-Taking Prediction Model
 
@@ -131,14 +133,6 @@ reg_fa_summary
 ```
 ## Examine the results of stepwise selection and identify optimal number of features
 ```{r}
-# code from textbook but couldn't get it to work yet
-
-# regfit.fa.fwd = regsubsets(first_action ~  prev_total_correct +
-#                           prev_percent_correct + prev_problem_requested_hint + 
-#                           prev_percent_problem_requested_hint + prev_avg_response_time + 
-#                           prev_total_bottom_hint + prev_percent_bottom_hint +
-#                           prev_avg_attempt_count, data=train, method="forward")
-
 test.mat = model.matrix(first_action ~ prev_total_correct +
                           prev_percent_correct + prev_problem_requested_hint +
                           prev_percent_problem_requested_hint + prev_avg_response_time +
@@ -156,6 +150,7 @@ val.errors
 
 which.min(val.errors)
 ```
+
 ## Plotting the results of forward stepwise selection
 ```{r}
 # plots to examine RSS, R2, Cp and BIC 
@@ -175,25 +170,24 @@ plot(reg_fa_summary$bic, xlab = "Number of Variables", ylab = "BIC", type = "l")
 bic_min = which.min(reg_fa_summary$bic) # 6
 points(bic_min, reg_fa_summary$bic[bic_min], col = "red", cex = 2, pch = 20)}
 ```
+the model with the following five features was selected based on the results;
+  features included: prev_total_correct, prev_problem_requested_hint, 
+    prev_percent_problem_requested_hint, prev_avg_response_time, prev_percent_bottom_hint
+  features excluded: prev_percent_correct, prev_total_bottom_hint, prev_avg_attempt_count
 
 ##Drop the lowest performing predictors based on forward stepwise selection results and fit the data to the logistic regression model 
 ```{r}
-#fit a logistic regression model on train using 4 features based on forward stepwise selection
+#fit a logistic regression model on train using 5 features based on forward stepwise selection
 
-# prev_problem_requested_hint 
+# prev_total_correct
+# prev_problem_requested_hint, 
 # prev_percent_problem_requested_hint
-# prev_total_bottom_hint 
+# prev_avg_response_time
 # prev_percent_bottom_hint
 
-# re_lg_hint <- glm(first_action ~ tutor_mode + answer_type + prev_total_correct + 
-#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
-#                  prev_percent_bottom_hint + prev_avg_attempt_count, 
-#                data=train, family="binomial")
-
-
-re_lg_hint <- glm(first_action ~ prev_problem_requested_hint +
-                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
-                 prev_percent_bottom_hint,
+re_lg_hint <- glm(first_action ~ prev_total_correct +
+                 prev_problem_requested_hint + prev_percent_problem_requested_hint +
+                 prev_avg_response_time + prev_percent_bottom_hint,
                   data=train, family="binomial")
 
 #compute AUC of this model on the test dataset  
@@ -206,20 +200,21 @@ cat('the auc score is ', 100*test.re.lg.hint.perf@y.values[[1]], "\n")
 re_lg_hint_coef <- summary(re_lg_hint)[["coefficients"]]
 re_lg_hint_coef[order(re_lg_hint_coef[ , 1]), ]   
 ```
+the auc score is 82.33356
 
 ## Fitting a random forest model based on the results of the forward stepwise regression
 
 ```{r}
 #fit a random forest model on train
 
-# rf_hint <- randomForest(first_action ~ tutor_mode + answer_type + prev_total_correct + 
-#                  prev_percent_problem_requested_hint + prev_avg_response_time + 
-#                  prev_percent_bottom_hint + prev_avg_attempt_count, data=train, ntree=200, 
-#                  na.action=na.omit)
+# rf_hint <- randomForest(first_action ~ prev_problem_requested_hint +
+#                  prev_percent_problem_requested_hint + prev_total_bottom_hint +
+#                  prev_percent_bottom_hint,
+#                data=train, ntree = 200, na.action=na.omit)
 
-rf_hint <- randomForest(first_action ~ prev_problem_requested_hint +
-                 prev_percent_problem_requested_hint + prev_total_bottom_hint +
-                 prev_percent_bottom_hint,
+rf_hint <- randomForest(first_action ~ prev_total_correct +
+                 prev_problem_requested_hint + prev_percent_problem_requested_hint +
+                 prev_avg_response_time + prev_percent_bottom_hint,
                data=train, ntree = 200, na.action=na.omit)
 
 #compute AUC of this model on the test dataset  
@@ -228,6 +223,7 @@ test.rf.hint.pred <- prediction(test$rf.hint.pred.prob, test$first_action)
 test.rf.hint.perf <- performance(test.rf.hint.pred, "auc")
 cat('the auc score is ', 100*test.rf.hint.perf@y.values[[1]], "\n") 
 ```
+the auc score is  84.16235 (a random forest model has a better AUC score)
 
 ##comparing the performance of two models using performance plots
 
@@ -255,50 +251,6 @@ p <- p + scale_y_continuous("Percent of Attempts with Hint", limits=c(0.5,1), la
 p
 ```
 
-Before fitting a model, we dropped some features (which we hoped to embed in the model); 
-  problem_type = only 1 factor 
-  problem_id = more than 53 factors
-  teacher_id = more than 53 factors
-  
-The AUC of the logistic model predicting hint-taking on the test dataset is 85.17075
-
-The five smallest and five largest coefficients in this model
-  Smallest: answer_typechoose_1 < answer_typechoose_n < prev_percent_correct <
-            prev_total_bottom_hint < prev_total_correct 
-  Largest:  tutor_modetutor > prev_percent_bottom_hint > answer_typefill_in_1 > 
-            prev_percent_problem_requested_hint > prev_problem_requested_hint
-### The mode being tutor is the strongest predictor because no one has taken a hint during a test (I verified that), it seems like students prefer to try answering and not get hints when they know it will be counted as a mistake anyway. Maybe we should drop test questions altogether, it will definitely hurt the prediction but I think the model makes more sense that way.
-  
-The features we decided to drop: 
-  (a) prev_problem_requested_hint, (b) prev_percent_correct, (c) prev_total_bottom_hint
-  These features are somewhat similar in content respectively with 
-  (a1) prev_percent_problem_requested_hint, (b1) prev_total_correct, and (c1) prev_percent_bottom_hint, 
-  and each had relatively low coefficient than its compared feature. 
-  
-  
-
-
-
-  
-
-
-The AUC of the logistic model predicting hint-taking on the test dataset is 84.97453 (*decreased from 85.2)
-
-The smallest and five largest coefficients in this model
-  Smallest: answer_typechoose_1 < answer_typechoose_n < prev_percent_problem_requested_hint < 
-            prev_total_correct 
-  Largest:  tutor_modetutor > prev_percent_bottom_hint > answer_typefill_in_1 > 
-            prev_avg_attempt_count > prev_avg_response_time
-            
-### Maybe add some explanation as to why we decided to stay without the 3 variables dropped if the AUC score is lower? maybe for easier interpretability?
-            
-
-
-The computed auc score is 70.20511. *How does the AUC of the random forest compare with the AUC of the logistic regression model?
-
-
-Overall, logistic regression shows a better performance than that of the random forest model.
-
 # Part C: Bottom-out-Hint-Taking Prediction
 
 ```{r}
@@ -313,6 +265,26 @@ regfit.bh.fwd = regsubsets(bottom_hint ~ prev_total_correct +
 
 reg_bh_summary = summary(regfit.bh.fwd)
 reg_bh_summary
+```
+
+## Examine the results of stepwise selection and identify optimal number of features
+```{r}
+test.mat.bh = model.matrix(bottom_hint ~ prev_total_correct +
+                          prev_percent_correct + prev_problem_requested_hint +
+                          prev_percent_problem_requested_hint + prev_avg_response_time +
+                          prev_total_bottom_hint + prev_percent_bottom_hint +
+                          prev_avg_attempt_count, data=test)
+
+val.errors=rep(NA,8)
+for (i in 1:8){
+  coefi=coef(regfit.bh.fwd, id=i)
+  pred=test.mat.bh[,names(coefi)]%*%coefi
+  val.errors[i]=mean((as.integer(test$bottom_hint)-pred)^2)
+}
+
+val.errors
+
+which.min(val.errors)
 ```
 
 ```{r}
@@ -335,26 +307,27 @@ points(bic_min, reg_bh_summary$bic[bic_min], col = "red", cex = 2, pch = 20)}
 
 ```
 
-
+the model with the following six features was selected based on the results;
+  features included: prev_total_correct, prev_problem_requested_hint, 
+    prev_percent_problem_requested_hint, prev_avg_response_time, 
+    prev_total_bottom_hint, prev_percent_bottom_hint, 
+  features excluded: prev_percent_correct, prev_avg_attempt_count
 
 
 ```{r}
 # fit the model with the following features
 
+# prev_total_correct
 # prev_problem_requested_hint
 # prev_percent_problem_requested_hint
+# prev_avg_response_time
 # prev_total_bottom_hint
 # prev_percent_bottom_hint
 
-# re_lg_bottom_hint <- glm(bottom_hint ~ prev_percent_correct +
-#                            prev_total_correct +
-#                            prev_problem_requested_hint +
-#                            prev_percent_problem_requested_hint +
-#                            prev_total_bottom_hint + prev_percent_bottom_hint,
-#                           data=train, family="binomial")
-
-re_lg_bottom_hint <- glm(bottom_hint ~ prev_problem_requested_hint +
+re_lg_bottom_hint <- glm(bottom_hint ~ prev_total_correct + 
+                           prev_problem_requested_hint +
                            prev_percent_problem_requested_hint +
+                           prev_avg_response_time + 
                            prev_total_bottom_hint +
                            prev_percent_bottom_hint,
                           data=train, family="binomial")
@@ -371,33 +344,14 @@ re_lg_bottom_hint_coef <- summary(re_lg_bottom_hint)[["coefficients"]]
 re_lg_bottom_hint_coef[order(re_lg_bottom_hint_coef[ , 1]), ]  
 
 ```
-The AUC of the revised logistic model predicting bottom_hint on the test dataset is 81.73045
-
-The smallest and five largest coefficients in this model
-
-Smallest:
-1. answer_typechoose_1
-2. answer_typechoose_n
-3. prev_percent_correct
-4. prev_total_bottom_hint
-
-Largest:
-1. tutor_modetutor
-2. prev_percent_bottom_hint
-3. answer_typefill_in_1
-4. prev_percent_problem_requested_hint
-5. prev_avg_attempt_count 
+The AUC of the revised logistic model predicting bottom_hint on the test dataset is 78.48752
 
 ```{r}
 #fit a random forest model on train
-# rf_bottom_hint <- randomForest(bottom_hint ~ tutor_mode + answer_type + 
-#                  prev_percent_correct + 
-#                  prev_percent_problem_requested_hint + 
-#                  prev_total_bottom_hint + prev_percent_bottom_hint + prev_avg_attempt_count, 
-#                data=train, ntree=200, na.action=na.omit)
-
-rf_bottom_hint <- randomForest(bottom_hint ~ prev_problem_requested_hint +
+rf_bottom_hint <- randomForest(bottom_hint ~ prev_total_correct + 
+                           prev_problem_requested_hint +
                            prev_percent_problem_requested_hint +
+                           prev_avg_response_time + 
                            prev_total_bottom_hint +
                            prev_percent_bottom_hint,
                           data=train, ntree=200, na.action=na.omit)
@@ -411,7 +365,7 @@ cat('the auc score is ', 100*test.rf.bottom.hint.perf@y.values[[1]], "\n")
 
 ```
 
-The AUC score of randomforest model for predicting bottom_hint on the test dataset is 64.05265
+The AUC score of randomforest model for predicting bottom_hint on the test dataset is 82.39494
 
 
 ```{r}
@@ -452,6 +406,26 @@ reg_c_summary
 
 ```
 
+## Examine the results of stepwise selection and identify optimal number of features
+```{r}
+test.mat.c = model.matrix(correct ~ prev_total_correct +
+                          prev_percent_correct + prev_problem_requested_hint +
+                          prev_percent_problem_requested_hint + prev_avg_response_time +
+                          prev_total_bottom_hint + prev_percent_bottom_hint +
+                          prev_avg_attempt_count, data=test)
+
+val.errors=rep(NA,8)
+for (i in 1:8){
+  coefi=coef(regfit.c.fwd, id=i)
+  pred=test.mat.c[,names(coefi)]%*%coefi
+  val.errors[i]=mean((as.integer(test$correct)-pred)^2)
+}
+
+val.errors
+
+which.min(val.errors)
+```
+
 ```{r}
 par(mfrow=c(2,2))
 {plot(reg_c_summary$rss, xlab = "Number of Variables", ylab = "RSS", type = "l")
@@ -470,24 +444,26 @@ bic_min = which.min(reg_c_summary$bic) # 6
 points(bic_min, reg_c_summary$bic[bic_min], col = "red", cex = 2, pch = 20)}
 ```
 
+the model with the following six features was selected based on the results;
+  features included: prev_total_correct, prev_percent_correct, prev_problem_requested_hint,
+    prev_percent_problem_requested_hint, prev_avg_response_time, prev_percent_bottom_hint
+  features excluded: prev_total_bottom_hint, prev_avg_attempt_count
+
 ```{r}
 # fit the model based on the results from forward stepwise selection by including 4 features
 # prev_total_correct
 # prev_percent_correct
+# prev_problem_requested_hint
 # prev_percent_problem_requested_hint
-# prev_total_bottom_hint
-
-# re_lg_correct <- glm(correct ~ prev_percent_correct +
-#                            prev_total_correct +
-#                            prev_percent_problem_requested_hint +
-#                            prev_avg_attempt_count +
-#                            prev_percent_bottom_hint,
-#                           data=train, family="binomial")
+# prev_avg_response_time
+# prev_percent_bottom_hint
 
 re_lg_correct <- glm(correct ~ prev_total_correct +
                            prev_percent_correct +
+                           prev_problem_requested_hint + 
                            prev_percent_problem_requested_hint +
-                           prev_total_bottom_hint,
+                           prev_avg_response_time + 
+                           prev_percent_bottom_hint,
                           data=train, family="binomial")
 
 #compute AUC of this model on the test dataset  
@@ -499,20 +475,17 @@ cat('the auc score is ', 100*test.re.lg.correct.perf@y.values[[1]], "\n")
 re_lg_correct_coef <- summary(re_lg_correct)[["coefficients"]]
 re_lg_correct_coef[order(re_lg_correct_coef[ , 1]), ]  
 ```
-the auc score is  69.74068 
+the auc score is  66.69336 
+
 ```{r}
 #fit a random forest model on train
-# rf_correct <- randomForest(correct ~ prev_percent_correct +
-#                            prev_total_correct +
-#                            prev_percent_problem_requested_hint +
-#                            prev_avg_attempt_count +
-#                            prev_percent_bottom_hint,
-#                data=train, ntree=200, na.action=na.omit)
 
 rf_correct <- randomForest(correct ~ prev_total_correct +
                            prev_percent_correct +
+                           prev_problem_requested_hint + 
                            prev_percent_problem_requested_hint +
-                           prev_total_bottom_hint,
+                           prev_avg_response_time + 
+                           prev_percent_bottom_hint,
                           data=train, ntree=200, na.action=na.omit)
 
 
@@ -523,6 +496,8 @@ test.rf.correct.perf <- performance(test.rf.correct.pred, "auc")
 cat('the auc score is ', 100*test.rf.correct.perf@y.values[[1]], "\n") 
 
 ```
+
+the auc score is  66.77243 
 
 ```{r}
 #compares the performance of two models using the plots
@@ -541,11 +516,7 @@ plot.data.correct <- bind_rows(plot.data.rf.correct,plot.data.lm.correct)
 theme_set(theme_bw())
 p <- ggplot(data=plot.data.correct, aes(x=numrank, y=percent.correct, col = method)) 
 p <- p + geom_line()
-p <- p + xlab('Number of Attempts') + xlim(1,1000)
+p <- p + xlab('Number of Attempts') + xlim(1,200)
 p <- p + scale_y_continuous("Percent of correct answers", limits=c(0.5,1), labels=scales::percent)
 p
 ```
-
-
-# Part #: Scaffolding-Taking Prediction
-** Right now, I don't want to predict scaffolding. This is too complicated to consider since if a problem has scaffolding and the student answers incorrectly or asks for the problem to be broken into steps, a new problem will be created called a scaffolding problem. LMK
