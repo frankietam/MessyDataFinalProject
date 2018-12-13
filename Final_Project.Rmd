@@ -44,6 +44,7 @@ library(foreach)
 library(car)
 library(ROCR)
 library(leaps)
+library(psych)
 #import the data
 df_raw <- read.csv("skill_builder_data.csv")
 ```
@@ -73,11 +74,17 @@ df_clean <- subset(df_clean,!duplicated(df_clean$order_id))
 
 ##Feature engineering; make historical features
 ```{r}
-#use the latest order id as reference
-df_last <- df_clean %>% group_by(user_id) %>% arrange(order_id) %>% slice(n())
-df_hist <- merge(df_last, df_clean[c('user_id', 'order_id', 'problem_id', 'correct', 'hint_count', 'hint_total', 'bottom_hint', 'ms_first_response', 'attempt_count')], by = 'user_id', all.x = TRUE, allow.cartesian=TRUE)
+#Create a tibble with each order's previous orders
+orders_a <- df_clean[,c(1,3)]
+orders_b <- df_clean[,c(1,3)]
+names(orders_a) <- c("order_id.x", "user_id")
+names(orders_b) <- c("order_id.y", "user_id")
+Orders <- left_join(orders_a,orders_b, by = "user_id") %>% filter(order_id.y < order_id.x)
+
+df_m <- df_clean[c('user_id', 'order_id', 'problem_id', 'correct', 'hint_count', 'hint_total', 'bottom_hint', 'ms_first_response', 'attempt_count')]
+df_hist <- merge(df_m, df_m, by = 'user_id', all.x = TRUE, allow.cartesian=TRUE)
 df_hist <- df_hist %>% filter(order_id.y < order_id.x)
-df_hist <- df_hist %>% group_by(user_id, order_id.x) %>% 
+df_hist <- df_hist %>% group_by(order_id.x) %>% 
   summarise(prev_total_correct = sum(correct.y),
             prev_num_problem = length(unique(problem_id.y)),
             prev_percent_correct=prev_total_correct/prev_num_problem,
@@ -91,11 +98,11 @@ df_hist <- df_hist %>% group_by(user_id, order_id.x) %>%
             prev_percent_bottom_hint = prev_total_bottom_hint/prev_questions_with_hints,
             prev_avg_attempt_count = mean(attempt_count.y)) 
 df_hist <- replace(df_hist, is.na(df_hist), 0)
-df_fin <-  df_clean %>% left_join(df_hist)
+#df_fin <-  df_clean %>% left_join(df_hist, by = order_id)
 
 #convert to factors
-df_fin <- df_fin %>%
-  mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
+#df_fin <- df_fin %>%
+ # mutate_at(vars(first_action,correct,bottom_hint,problem_id,teacher_id, school_id),funs(as.factor))
 ```
 #Part B: Hint-Taking Prediction Model
 
